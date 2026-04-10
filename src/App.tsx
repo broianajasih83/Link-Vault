@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { LinkCard } from './components/LinkCard';
 import { AddLinkDialog } from './components/AddLinkDialog';
+import { DeleteConfirmationDialog } from './components/DeleteConfirmationDialog';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 import { 
@@ -39,6 +40,8 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<Link | null>(null);
+  const [linkToDelete, setLinkToDelete] = useState<Link | null>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTab, setSelectedTab] = useState('all');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -152,12 +155,23 @@ export default function App() {
     }
   };
 
-  const handleDeleteLink = async (id: string) => {
+  const handleDeleteLink = async () => {
+    if (!linkToDelete) return;
     try {
-      await deleteDoc(doc(db, 'links', id));
+      await deleteDoc(doc(db, 'links', linkToDelete.id));
       toast.success("Link deleted.");
+      setIsDeleteDialogOpen(false);
+      setLinkToDelete(null);
     } catch (error) {
       toast.error("Failed to delete link.");
+    }
+  };
+
+  const confirmDelete = (id: string) => {
+    const link = links.find(l => l.id === id);
+    if (link) {
+      setLinkToDelete(link);
+      setIsDeleteDialogOpen(true);
     }
   };
 
@@ -401,7 +415,7 @@ export default function App() {
                   <LinkCard 
                     key={link.id} 
                     link={link} 
-                    onDelete={handleDeleteLink}
+                    onDelete={confirmDelete}
                     onToggleFavorite={handleToggleFavorite}
                     onEdit={(link) => {
                       setEditingLink(link);
@@ -424,6 +438,16 @@ export default function App() {
         }}
         onSave={handleSaveLink}
         editingLink={editingLink}
+      />
+
+      <DeleteConfirmationDialog
+        isOpen={isDeleteDialogOpen}
+        onClose={() => {
+          setIsDeleteDialogOpen(false);
+          setLinkToDelete(null);
+        }}
+        onConfirm={handleDeleteLink}
+        title={linkToDelete?.title || ''}
       />
 
       <footer className="border-t border-zinc-200 bg-white py-12 px-4 sm:px-8">
