@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "Link": {
+      "title": "Link",
+      "description": "A saved link with metadata and tags.",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "format": "uri", "description": "The URL of the link." },
+        "title": { "type": "string", "description": "The title of the link." },
+        "description": { "type": "string", "description": "A brief description or notes for the link." },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "A list of tags associated with the link." },
+        "userId": { "type": "string", "description": "The ID of the user who saved the link." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "The timestamp when the link was saved." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "The timestamp when the link was last updated." },
+        "isFavorite": { "type": "boolean", "description": "Whether the link is marked as a favorite." }
+      },
+      "required": ["url", "title", "userId", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/links/{linkId}": {
+      "schema": "Link",
+      "description": "Collection of saved links."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles."
+    }
+  }
+}
