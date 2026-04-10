@@ -63,11 +63,18 @@ service cloud.firestore {
     // Rules
     // ===============================================================
 
+    match /test/connection {
+      allow read: if true;
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
-                      request.resource.data.createdAt == resource.data.createdAt;
+      allow update: if isOwner(userId) && 
+                      (!('email' in request.resource.data) || request.resource.data.email is string) &&
+                      (!('themeColor' in request.resource.data) || request.resource.data.themeColor is string) &&
+                      (!('themeFont' in request.resource.data) || request.resource.data.themeFont is string) &&
+                      (!('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt);
     }
 
     match /links/{linkId} {

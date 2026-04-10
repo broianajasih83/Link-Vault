@@ -6,9 +6,12 @@ import { Link, UserProfile } from './types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { LinkCard } from './components/LinkCard';
+import { LinkTable } from './components/LinkTable';
 import { AddLinkDialog } from './components/AddLinkDialog';
+import { ThemeSettings } from './components/ThemeSettings';
 import { DeleteConfirmationDialog } from './components/DeleteConfirmationDialog';
 import { Toaster } from '@/components/ui/sonner';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import { 
   Search, 
@@ -25,7 +28,9 @@ import {
   Twitter,
   Linkedin,
   Mail,
-  Share2
+  Share2,
+  Settings,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Badge } from '@/components/ui/badge';
@@ -46,6 +51,50 @@ export default function App() {
   const [selectedTab, setSelectedTab] = useState('all');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isBulkTagDialogOpen, setIsBulkTagDialogOpen] = useState(false);
+  const [bulkTag, setBulkTag] = useState('');
+
+  // Apply theme to body
+  useEffect(() => {
+    if (userProfile) {
+      const colorClass = `theme-${userProfile.themeColor || 'zinc'}`;
+      const fontClass = `font-theme-${userProfile.themeFont || 'sans'}`;
+      
+      // Remove previous theme classes
+      document.body.className = document.body.className
+        .split(' ')
+        .filter(c => !c.startsWith('theme-') && !c.startsWith('font-theme-'))
+        .join(' ');
+        
+      document.body.classList.add(colorClass, fontClass);
+    }
+  }, [userProfile]);
+
+  const handleFirestoreError = (error: unknown, operationType: string, path: string | null) => {
+    const errInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+        isAnonymous: auth.currentUser?.isAnonymous,
+        tenantId: auth.currentUser?.tenantId,
+        providerInfo: auth.currentUser?.providerData.map(provider => ({
+          providerId: provider.providerId,
+          displayName: provider.displayName,
+          email: provider.email,
+          photoUrl: provider.photoURL
+        })) || []
+      },
+      operationType,
+      path
+    };
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+    return errInfo;
+  };
 
   // Test connection to Firestore
   useEffect(() => {
@@ -53,6 +102,7 @@ export default function App() {
       try {
         await getDocFromServer(doc(db, 'test', 'connection'));
       } catch (error) {
+        // Skip logging for other errors, as this is simply a connection test.
         if (error instanceof Error && error.message.includes('the client is offline')) {
           console.error("Please check your Firebase configuration.");
         }
@@ -66,14 +116,34 @@ export default function App() {
       setUser(user);
       setIsAuthReady(true);
       if (user) {
-        // Ensure user profile exists
-        const userRef = doc(db, 'users', user.uid);
-        await setDoc(userRef, {
-          email: user.email,
-          displayName: user.displayName,
-          photoURL: user.photoURL,
-          createdAt: Timestamp.now()
-        }, { merge: true });
+        try {
+          // Ensure user profile exists
+          const userRef = doc(db, 'users', user.uid);
+          
+          // Listen to user profile changes
+          onSnapshot(userRef, (snap) => {
+            if (snap.exists()) {
+              setUserProfile({ uid: snap.id, ...snap.data() } as UserProfile);
+            }
+          });
+
+          const userSnap = await getDocFromServer(userRef).catch(() => null);
+          
+          if (!userSnap?.exists()) {
+            await setDoc(userRef, {
+              email: user.email,
+              displayName: user.displayName,
+              photoURL: user.photoURL,
+              createdAt: Timestamp.now(),
+              themeColor: 'zinc',
+              themeFont: 'sans'
+            });
+          }
+        } catch (error) {
+          handleFirestoreError(error, 'WRITE', `users/${user.uid}`);
+        }
+      } else {
+        setUserProfile(null);
       }
     });
     return unsubscribe;
@@ -98,7 +168,7 @@ export default function App() {
       })) as Link[];
       setLinks(linksData);
     }, (error) => {
-      console.error("Firestore Error:", error);
+      handleFirestoreError(error, 'LIST', 'links');
       toast.error("Failed to fetch links. Check your permissions.");
     });
 
@@ -150,7 +220,7 @@ export default function App() {
       }
       setEditingLink(null);
     } catch (error) {
-      console.error("Error saving link:", error);
+      handleFirestoreError(error, 'WRITE', editingLink ? `links/${editingLink.id}` : 'links');
       toast.error("Failed to save link.");
     }
   };
@@ -163,6 +233,7 @@ export default function App() {
       setIsDeleteDialogOpen(false);
       setLinkToDelete(null);
     } catch (error) {
+      handleFirestoreError(error, 'DELETE', `links/${linkToDelete.id}`);
       toast.error("Failed to delete link.");
     }
   };
@@ -179,7 +250,59 @@ export default function App() {
     try {
       await updateDoc(doc(db, 'links', id), { isFavorite });
     } catch (error) {
+      handleFirestoreError(error, 'UPDATE', `links/${id}`);
       toast.error("Failed to update favorite status.");
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    try {
+      const promises = selectedIds.map(id => deleteDoc(doc(db, 'links', id)));
+      await Promise.all(promises);
+      toast.success(`Deleted ${selectedIds.length} links.`);
+      setSelectedIds([]);
+    } catch (error) {
+      handleFirestoreError(error, 'DELETE', 'bulk');
+      toast.error("Failed to delete some links.");
+    }
+  };
+
+  const handleBulkAddTag = async () => {
+    if (selectedIds.length === 0 || !bulkTag.trim()) return;
+    try {
+      const tagToAdd = bulkTag.trim().toLowerCase();
+      const promises = selectedIds.map(async (id) => {
+        const link = links.find(l => l.id === id);
+        if (link && !link.tags.includes(tagToAdd)) {
+          await updateDoc(doc(db, 'links', id), {
+            tags: [...link.tags, tagToAdd]
+          });
+        }
+      });
+      await Promise.all(promises);
+      toast.success(`Added tag "${tagToAdd}" to ${selectedIds.length} links.`);
+      setSelectedIds([]);
+      setBulkTag('');
+      setIsBulkTagDialogOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, 'UPDATE', 'bulk');
+      toast.error("Failed to update some links.");
+    }
+  };
+
+  const updateTheme = async (color?: string, font?: string) => {
+    if (!user) return;
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      const updates: any = {};
+      if (color) updates.themeColor = color;
+      if (font) updates.themeFont = font;
+      await updateDoc(userRef, updates);
+      toast.success("Theme updated!");
+    } catch (error) {
+      handleFirestoreError(error, 'UPDATE', `users/${user.uid}`);
+      toast.error("Failed to update theme.");
     }
   };
 
@@ -275,6 +398,9 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)} className="rounded-xl text-zinc-500 hover:text-zinc-900">
+              <Settings className="h-5 w-5" />
+            </Button>
             <div className="hidden sm:flex items-center gap-3 mr-4">
               <img src={user.photoURL || ''} alt={user.displayName || ''} className="h-8 w-8 rounded-full border border-zinc-200" />
               <div className="flex flex-col">
@@ -289,60 +415,155 @@ export default function App() {
         </div>
       </header>
 
+      {/* Bulk Actions Toolbar */}
+      <AnimatePresence>
+        {selectedIds.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-zinc-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-6 border border-zinc-800"
+          >
+            <div className="flex items-center gap-3 pr-6 border-r border-zinc-700">
+              <span className="bg-white text-zinc-900 text-xs font-black h-5 w-5 rounded-full flex items-center justify-center">
+                {selectedIds.length}
+              </span>
+              <span className="text-sm font-bold">Selected</span>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="text-white hover:bg-zinc-800 gap-2 h-9 px-4 rounded-xl"
+                onClick={() => setIsBulkTagDialogOpen(true)}
+              >
+                <TagIcon className="h-4 w-4" />
+                Add Tag
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="text-red-400 hover:bg-red-950/30 hover:text-red-400 gap-2 h-9 px-4 rounded-xl"
+                onClick={handleBulkDelete}
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="text-zinc-400 hover:bg-zinc-800 h-9 px-4 rounded-xl"
+                onClick={() => setSelectedIds([])}
+              >
+                Cancel
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <main className="flex-grow max-w-7xl mx-auto w-full px-4 py-8 sm:px-8 flex flex-col lg:flex-row gap-8">
         {/* Sidebar */}
-        <aside className="w-full lg:w-64 shrink-0 space-y-8">
-          <Button 
-            onClick={() => {
-              setEditingLink(null);
-              setIsAddDialogOpen(true);
-            }} 
-            className="w-full h-14 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-white font-bold shadow-lg hover:shadow-xl transition-all gap-2"
-          >
-            <Plus className="h-5 w-5" />
-            Add New Link
-          </Button>
+        <aside className="w-full lg:w-72 shrink-0 space-y-8">
+          <div className="relative group">
+            <div className="absolute -inset-0.5 bg-gradient-to-r from-zinc-900 to-zinc-600 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-1000 group-hover:duration-200"></div>
+            <Button 
+              onClick={() => {
+                setEditingLink(null);
+                setIsAddDialogOpen(true);
+              }} 
+              className="relative w-full h-14 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-white font-bold shadow-xl transition-all gap-2 overflow-hidden"
+            >
+              <div className="absolute inset-0 bg-gradient-to-tr from-white/10 to-transparent pointer-events-none" />
+              <Plus className="h-5 w-5" />
+              Add New Link
+            </Button>
+          </div>
 
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 px-2">Collections</h3>
-              <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
-                <TabsList className="flex flex-col h-auto bg-transparent p-0 gap-1">
-                  <TabsTrigger value="all" className="w-full justify-start gap-3 px-3 h-11 rounded-xl data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-zinc-900 text-zinc-500 transition-all border-none">
-                    <LayoutGrid className="h-4 w-4" /> All Links
-                  </TabsTrigger>
-                  <TabsTrigger value="favorites" className="w-full justify-start gap-3 px-3 h-11 rounded-xl data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-zinc-900 text-zinc-500 transition-all border-none">
-                    <Star className="h-4 w-4" /> Favorites
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
+          <div className="space-y-8">
+            {/* Quick Stats */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm">
+                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Total</p>
+                <p className="text-2xl font-display font-black text-zinc-900 leading-none">{links.length}</p>
+              </div>
+              <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm">
+                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">Favorites</p>
+                <p className="text-2xl font-display font-black text-zinc-900 leading-none">{links.filter(l => l.isFavorite).length}</p>
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between px-2">
+            <div className="space-y-3">
+              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 px-4">Collections</h3>
+              <nav className="space-y-1">
+                <button
+                  onClick={() => setSelectedTab('all')}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-4 h-12 rounded-xl transition-all font-medium text-sm",
+                    selectedTab === 'all' 
+                      ? "bg-zinc-900 text-white shadow-lg shadow-zinc-200" 
+                      : "text-zinc-500 hover:bg-white hover:text-zinc-900"
+                  )}
+                >
+                  <LayoutGrid className={cn("h-4 w-4", selectedTab === 'all' ? "text-white" : "text-zinc-400")} />
+                  All Links
+                  {selectedTab === 'all' && (
+                    <motion.div layoutId="active-pill" className="ml-auto h-1.5 w-1.5 rounded-full bg-white" />
+                  )}
+                </button>
+                <button
+                  onClick={() => setSelectedTab('favorites')}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-4 h-12 rounded-xl transition-all font-medium text-sm",
+                    selectedTab === 'favorites' 
+                      ? "bg-zinc-900 text-white shadow-lg shadow-zinc-200" 
+                      : "text-zinc-500 hover:bg-white hover:text-zinc-900"
+                  )}
+                >
+                  <Star className={cn("h-4 w-4", selectedTab === 'favorites' ? "text-white" : "text-zinc-400")} />
+                  Favorites
+                  {selectedTab === 'favorites' && (
+                    <motion.div layoutId="active-pill" className="ml-auto h-1.5 w-1.5 rounded-full bg-white" />
+                  )}
+                </button>
+              </nav>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between px-4">
                 <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">Tags</h3>
                 {selectedTag && (
-                  <button onClick={() => setSelectedTag(null)} className="text-[10px] text-zinc-400 hover:text-zinc-900 underline">Clear</button>
+                  <button 
+                    onClick={() => setSelectedTag(null)} 
+                    className="text-[10px] font-bold text-zinc-400 hover:text-zinc-900 transition-colors"
+                  >
+                    Reset
+                  </button>
                 )}
               </div>
-              <ScrollArea className="h-[300px] pr-4">
-                <div className="flex flex-wrap gap-2 p-1">
+              <ScrollArea className="h-[300px] px-2">
+                <div className="flex flex-wrap gap-2 p-2">
                   {allTags.map(tag => (
                     <Badge 
                       key={tag} 
                       variant={selectedTag === tag ? "default" : "secondary"}
                       className={cn(
-                        "cursor-pointer px-3 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all",
-                        selectedTag === tag ? "bg-zinc-900 text-white" : "bg-white text-zinc-500 hover:bg-zinc-100 border border-zinc-200"
+                        "cursor-pointer px-3 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all border-none",
+                        selectedTag === tag 
+                          ? "bg-zinc-900 text-white shadow-md" 
+                          : "bg-white text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 shadow-sm"
                       )}
                       onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
                     >
-                      <TagIcon className="h-3 w-3 mr-1.5 opacity-50" />
+                      <TagIcon className="h-3 w-3 mr-2 opacity-50" />
                       {tag}
                     </Badge>
                   ))}
                   {allTags.length === 0 && (
-                    <p className="text-xs text-zinc-400 italic px-2">No tags yet.</p>
+                    <div className="w-full py-8 text-center bg-zinc-100/50 rounded-2xl border border-dashed border-zinc-200">
+                      <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">No tags yet</p>
+                    </div>
                   )}
                 </div>
               </ScrollArea>
@@ -405,11 +626,8 @@ export default function App() {
                 Clear all filters
               </Button>
             </motion.div>
-          ) : (
-            <div className={cn(
-              "grid gap-6",
-              viewMode === 'grid' ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
-            )}>
+          ) : viewMode === 'grid' ? (
+            <div className="grid gap-6 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
               <AnimatePresence mode="popLayout">
                 {filteredLinks.map((link) => (
                   <LinkCard 
@@ -426,6 +644,24 @@ export default function App() {
                 ))}
               </AnimatePresence>
             </div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <LinkTable 
+                links={filteredLinks}
+                selectedIds={selectedIds}
+                onSelectionChange={setSelectedIds}
+                onDelete={confirmDelete}
+                onToggleFavorite={handleToggleFavorite}
+                onEdit={(link) => {
+                  setEditingLink(link);
+                  setIsAddDialogOpen(true);
+                }}
+                onShare={handleShare}
+              />
+            </motion.div>
           )}
         </section>
       </main>
@@ -449,6 +685,54 @@ export default function App() {
         onConfirm={handleDeleteLink}
         title={linkToDelete?.title || ''}
       />
+
+      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+        <DialogContent className="sm:max-w-[500px] rounded-2xl border-none shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-display font-bold">Personalize LinkVault</DialogTitle>
+          </DialogHeader>
+          <div className="py-6">
+            <ThemeSettings 
+              currentColor={userProfile?.themeColor || 'zinc'}
+              currentFont={userProfile?.themeFont || 'sans'}
+              onColorChange={(color) => updateTheme(color, undefined)}
+              onFontChange={(font) => updateTheme(undefined, font)}
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => setIsSettingsOpen(false)} className="rounded-xl bg-zinc-900 px-8">
+              Done
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isBulkTagDialogOpen} onOpenChange={setIsBulkTagDialogOpen}>
+        <DialogContent className="sm:max-w-[400px] rounded-2xl border-none shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-display font-bold">Add Tag to {selectedIds.length} Links</DialogTitle>
+          </DialogHeader>
+          <div className="py-6 space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-black uppercase tracking-widest text-zinc-400">Tag Name</label>
+              <Input 
+                placeholder="e.g. reading-list" 
+                value={bulkTag}
+                onChange={(e) => setBulkTag(e.target.value)}
+                className="rounded-xl border-zinc-200 focus:ring-zinc-900"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setIsBulkTagDialogOpen(false)} className="rounded-xl">
+              Cancel
+            </Button>
+            <Button onClick={handleBulkAddTag} className="rounded-xl bg-zinc-900 px-8">
+              Add Tag
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <footer className="border-t border-zinc-200 bg-white py-12 px-4 sm:px-8">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">

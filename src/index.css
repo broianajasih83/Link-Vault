@@ -1,9 +1,11 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap');
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-serif: "Libre Baskerville", serif;
   
   --radius-lg: 1rem;
   --radius-md: 0.75rem;
@@ -12,8 +14,22 @@
 
 @layer base {
   body {
-    @apply bg-zinc-50 text-zinc-900 antialiased;
+    @apply bg-zinc-50 text-zinc-900 antialiased transition-colors duration-300;
   }
+
+  /* Theme Color Variations */
+  .theme-slate { --primary: oklch(0.205 0 0); --primary-foreground: oklch(0.985 0 0); }
+  .theme-stone { --primary: oklch(0.3 0.02 60); --primary-foreground: oklch(0.985 0 0); }
+  .theme-orange { --primary: oklch(0.6 0.2 40); --primary-foreground: oklch(0.985 0 0); }
+  .theme-blue { --primary: oklch(0.5 0.2 250); --primary-foreground: oklch(0.985 0 0); }
+  .theme-rose { --primary: oklch(0.6 0.2 0); --primary-foreground: oklch(0.985 0 0); }
+  .theme-green { --primary: oklch(0.6 0.2 150); --primary-foreground: oklch(0.985 0 0); }
+
+  /* Theme Font Variations */
+  .font-theme-sans { font-family: var(--font-sans); }
+  .font-theme-display { font-family: var(--font-display); }
+  .font-theme-mono { font-family: var(--font-mono); }
+  .font-theme-serif { font-family: var(--font-serif); }
 }
 
 @import "tw-animate-css";
